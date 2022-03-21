@@ -1,0 +1,342 @@
+#! /usr/bin/python3
+'''
+AUTHOR: Nate Patanjo
+'''
+import json
+import sys
+import cgitb
+import os
+import MySQLdb
+import passwords
+ 
+cgitb.enable()
+
+conn = MySQLdb.connect(host=passwords.SQL_HOST, user=passwords.SQL_USER, passwd=passwords.SQL_PASS, db="database_p6")
+cursor = conn.cursor()
+
+'''
+This is the main emthod that finds the correct method and dispaches
+'''
+def main():
+    if "PATH_INFO" not in os.environ or os.environ["PATH_INFO"] == "/":
+        print("Status: 200 OK")
+        print("Content-Type: text/html")
+        print()
+    else: 
+        if os.environ["REQUEST_METHOD"] == "GET" and \
+                os.environ["PATH_INFO"] == "/students":
+            get_students_no_id()
+
+        elif os.environ["REQUEST_METHOD"] == "GET" and \
+                os.environ["PATH_INFO"] == "/courses":
+            get_courses()
+
+        elif os.environ["REQUEST_METHOD"] == "GET" and \
+                "/students" in os.environ["PATH_INFO"] and \
+                len(os.environ["PATH_INFO"].split("/")) == 3:
+            get_students_with_id()
+
+        elif os.environ["REQUEST_METHOD"] == "PUT" and \
+                "/students" in os.environ["PATH_INFO"] and \
+                len(os.environ["PATH_INFO"].split("/")) != 4:
+            put_students_with_id()
+
+        elif os.environ["REQUEST_METHOD"] == "POST" and \
+                "/students" in os.environ["PATH_INFO"] and \
+                len(os.environ["PATH_INFO"].split("/")) == 4:
+            post_students_with_courses()
+
+        elif os.environ["REQUEST_METHOD"] == "DELETE" and \
+                "/students" in os.environ["PATH_INFO"]:
+            del_students_with_id()
+
+        elif os.environ["REQUEST_METHOD"] == "DELETE" and \
+                "/courses" in os.environ["PATH_INFO"]:
+            del_courses()
+
+        elif os.environ["REQUEST_METHOD"] == "GET" and \
+                os.environ["PATH_INFO"] == "/courses":
+            get_courses()
+
+        elif os.environ["REQUEST_METHOD"] == "POST" and \
+                os.environ["PATH_INFO"] == "/students":
+            post_students()
+
+        elif os.environ["REQUEST_METHOD"] == "POST" and \
+                os.environ["PATH_INFO"] == "/courses":
+            post_courses()
+        else: 
+            code_404()
+
+'''
+This is the GET method when no id is specified. 
+When no id is specified all the students are printed in Json
+'''
+def get_students_no_id():
+    ret_arr = []
+
+    cursor.execute("SELECT * FROM students")
+    data = cursor.fetchall()
+    conn.commit()
+    cursor.execute("SELECT * FROM registration")
+    d2 = cursor.fetchall()
+    conn.commit()
+    conn.close()
+
+    if len(data) == 0:
+        code_404()
+
+    else:
+        for i in data:
+            tmp_arr = []
+            for j in d2:
+                if i[0] in j:
+                    tmp_arr.append(j[1])
+            tmp_d = {"id": i[0], "name": i[1], "courses": tmp_arr, "link": i[2]}
+            ret_arr.append(tmp_d)
+
+        print("Status: 200 OK")
+        print("Content-Type: text/html")
+        print()
+        print(json.dumps(ret_arr, indent=2))
+
+
+
+'''
+this is the GET method for courses
+'''
+def get_courses():
+    ret_arr = []
+
+    cursor.execute("SELECT * FROM courses")
+    data = cursor.fetchall()
+    conn.commit()
+    conn.close()
+
+    if len(data) == 0:
+        code_404()
+
+    else:
+        for i in data:
+            tmp = {"id": i[0], "link": i[1]}
+            ret_arr.append(tmp)
+
+        print("Status: 200 OK")
+        print("Content-Type: text/html")
+        print()
+        print(json.dumps(ret_arr, indent=2))
+
+'''
+This is the GET method when there is an id specified.
+Only the specified id will be printed in json.
+'''
+def get_students_with_id():
+    ret_arr = []
+
+    key = os.environ["PATH_INFO"].split('/')[2]
+    key = int(key)
+
+    cursor.execute(f"SELECT * FROM students WHERE id={key}")
+    data = cursor.fetchall()
+    conn.commit()
+    conn.close()
+
+    if len(data) == 0:
+        code_404()
+
+    else:
+        for i in data:
+            tmp = {"id": i[0], "name": i[1], "link": i[2]}
+            ret_arr.append(tmp)
+
+        print("Status: 200 OK")
+        print("Content-Type: text/html")
+        print()
+        print(json.dumps(ret_arr, indent=2))
+
+
+'''
+This is the first method called when adding a new student to the
+database. This method also checks to make sure the id is not already
+present in the database file.
+'''
+def post_students():
+
+    new_rec = json.loads(sys.stdin.read())
+
+    if "id" not in new_rec or type(new_rec["id" ]) != int or id_check(new_rec) == False or\
+            "name" not in new_rec or type(new_rec["name" ]) != str:
+        code_400()
+
+    else:
+        add_s(new_rec)
+        conn.close()
+        code_303()
+
+'''
+this is the POST method for courses
+'''
+def post_courses():
+
+    new_rec = json.loads(sys.stdin.read())
+    new_rec_f = {"id": new_rec}
+
+    if type(new_rec["id"]) != str or \
+            id_check_c(new_rec_f["id"]) == False:
+        code_400()
+
+    else:
+        add_c(new_rec_f)
+        conn.close()
+        code_303()
+
+''' this is the put method for students '''
+def put_students_with_id():
+
+    key = os.environ["PATH_INFO"].split('/')[2]
+    key = int(key)
+    new_name = json.loads(sys.stdin.read())["name"]
+    if type(new_name) != str:
+        code_400()
+    elif id_check({"id": key}) == False:
+        cursor.execute("UPDATE students SET name='%s' WHERE id=%s" %(new_name, key))
+        conn.commit()
+        conn.close()
+        code_303()
+    else:
+        code_404()
+
+'''
+This is the post method which creates a new record to the 
+registration table. The new record is includes the id of 
+the students and the courses.
+'''
+def post_students_with_courses():
+    key = os.environ["PATH_INFO"].split('/')[2]
+    key = int(key)
+    new_rec = json.loads(sys.stdin.read())
+
+    if type(new_rec) != str:
+        code_400()
+
+    elif id_check_c({"id": new_rec}) == False:
+        command = "INSERT INTO registration (studentID, courseID) VALUES (%s, %s)"
+        values = (int(key), str(new_rec))
+
+        cursor.execute(command, values)
+        conn.commit()
+        conn.close()
+        code_303()
+    else:
+        code_404()
+
+
+
+'''This is the delete method for students'''
+def del_students_with_id():
+    key = os.environ["PATH_INFO"].split('/')[2]
+    key = int(key)
+    if id_check({"id": key}) == False:
+        cursor.execute("DELETE FROM students WHERE id=%s" %(key))
+        conn.commit()
+        conn.close()
+        code_303()
+    else:
+        code_404()
+
+
+'''
+The DELETE method for courses
+'''
+def del_courses():
+    key = os.environ["PATH_INFO"].split('/')[2]
+
+    cursor.execute("SELECT * FROM registration")
+    data = cursor.fetchall()
+    conn.commit()
+    for i in data:
+        if key in i:
+            code_400()
+            conn.close()
+            return
+    cursor.execute("SELECT * FROM courses")
+    d2 = cursor.fetchall()
+    conn.commit()
+    for j in d2:
+        if key in j:
+            cursor.execute("DELETE FROM courses WHERE id='%s'" %(key))
+            conn.commit()
+            conn.close()
+            code_303()
+            return
+    code_400()
+
+'''
+This method adds to the "database". 
+'''
+def add_s(new_rec):
+    _id, name, link = new_rec["id"], new_rec["name"], f"{os.environ['HTTP_HOST']}/cgi-bin/school/students/{new_rec['id']}"
+    command = "INSERT INTO students (id, name, link) VALUES (%s, %s, %s)"
+    values = (int(_id), str(name), str(link))
+    cursor.execute(command, values)
+    conn.commit() #close is called in post method
+    
+'''
+helper function for adding to the courses 
+'''
+def add_c(new_rec):
+
+    _id = new_rec["id"]["id"]
+    link = "%s/cgi-bin/school/courses/%s" %(os.environ["HTTP_HOST"], _id)
+    command = "INSERT INTO courses (id, link) VALUES (%s, %s)"
+    values = (str(_id), str(link))
+    cursor.execute(command, values)
+    conn.commit() #close is called in post method
+
+
+''' Returns true is the id already exists'''
+def id_check(new_rec):
+    key = new_rec["id"]
+    key = int(key)
+    cursor.execute("SELECT * FROM students WHERE id=%s" %(key))
+    data = cursor.fetchall()
+    conn.commit()
+
+    if len(data) == 0:
+        return True
+    else: 
+        return False
+
+'''
+Helper to check if an id already exists
+'''
+def id_check_c(new_rec):
+    key = new_rec["id"]
+    cursor.execute("SELECT * FROM courses")
+    data = cursor.fetchall()
+    conn.commit()
+
+    for i in data:
+        if key in i:
+            return False
+
+    return True
+
+'''
+These are easy access to status codes
+'''
+def code_404():
+    print("Status: 404 Not Found")
+    print()
+
+def code_303():
+    print("Status: 303 Redirect")
+    print("Location: /cgi-bin/school")
+    print()
+
+def code_400():
+    print("Status: 400 Bad Request")
+    print()
+
+
+main()
